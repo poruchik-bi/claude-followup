@@ -22,16 +22,22 @@ is attached, and whether or not this process is still around.
 
 ## Install
 
+It's one file with no dependencies, so the simplest install is a download.
+This sidesteps PEP 668 (`externally-managed-environment`) entirely — nothing
+is installed into a Python environment:
+
 ```sh
-uv tool install claude-followup
-# or
-pipx install claude-followup
-# or just drop the single file on your PATH — it has no dependencies
-curl -o ~/.local/bin/claude-followup https://raw.githubusercontent.com/poruchik-bi/claude-followup/main/claude_followup.py
+mkdir -p ~/.local/bin
+curl -fsSL -o ~/.local/bin/claude-followup \
+  https://raw.githubusercontent.com/poruchik-bi/claude-followup/main/claude_followup.py
 chmod +x ~/.local/bin/claude-followup
+ln -sf ~/.local/bin/claude-followup ~/.local/bin/cf   # optional short alias
 ```
 
-Install straight from the repo:
+Make sure `~/.local/bin` is on your `$PATH`.
+
+<details>
+<summary>Or install as a managed package</summary>
 
 ```sh
 uv tool install git+https://github.com/poruchik-bi/claude-followup
@@ -39,17 +45,32 @@ uv tool install git+https://github.com/poruchik-bi/claude-followup
 pipx install git+https://github.com/poruchik-bi/claude-followup
 ```
 
-Both installs give you `claude-followup` and the short alias `cf` — the same
-tool either way, and jobs queued with one are listed and cancelled by the
-other. Help text and errors report whichever name you used.
+On Debian/Ubuntu, `pip install --user` fails with
+`error: externally-managed-environment` — that is PEP 668 protecting the
+system Python, not a problem with this package. Use `pipx`
+(`sudo apt install pipx`), `uv`, or an explicit venv:
+
+```sh
+python3 -m venv ~/.local/share/claude-followup
+~/.local/share/claude-followup/bin/pip install git+https://github.com/poruchik-bi/claude-followup
+ln -sf ~/.local/share/claude-followup/bin/claude-followup ~/.local/bin/
+```
+
+Do not reach for `pip --break-system-packages`; there is nothing to install
+into the system Python in the first place.
+
+</details>
+
+Either way you get `claude-followup` and the short alias `cf` — the same tool,
+and jobs queued with one are listed and cancelled by the other. Help text and
+errors report whichever name you used.
 
 ```sh
 cf schedule claude4 --auto -m "continue"
 ```
 
-If `cf` collides with something else on your `$PATH` (Cloud Foundry ships a
-`cf`), install with `pip install --no-scripts` and symlink only the name you
-want, or just use the single-file install below and name it yourself.
+`cf` is also Cloud Foundry's CLI name. If that clashes, use the download
+install and skip the `ln -s`, or symlink it as whatever you prefer.
 
 **Requirements:** Linux with systemd user sessions, Python 3.9+, and zellij
 and/or tmux. No third-party Python packages.
