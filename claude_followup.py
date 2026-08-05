@@ -28,7 +28,19 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 __version__ = "0.1.0"
 
-PROG = "claude-followup"
+CANONICAL_PROG = "claude-followup"
+
+
+def prog_name(argv0: str | None = None) -> str:
+    """Report the name we were actually invoked as, so `cf --help` says `cf`."""
+    name = Path(argv0 if argv0 is not None else (sys.argv[0] or "")).name
+    if not name or name.endswith(".py") or name.startswith("python"):
+        return CANONICAL_PROG
+    return name
+
+
+PROG = prog_name()
+# Unit names must stay stable across aliases or list/cancel would miss jobs.
 UNIT_PREFIX = "claude-followup"
 DEFAULT_MESSAGE = "continue"
 DEFAULT_BUFFER_SEC = 30

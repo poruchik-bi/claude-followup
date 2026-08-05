@@ -39,6 +39,18 @@ uv tool install git+https://github.com/poruchik-bi/claude-followup
 pipx install git+https://github.com/poruchik-bi/claude-followup
 ```
 
+Both installs give you `claude-followup` and the short alias `cf` — the same
+tool either way, and jobs queued with one are listed and cancelled by the
+other. Help text and errors report whichever name you used.
+
+```sh
+cf schedule claude4 --auto -m "continue"
+```
+
+If `cf` collides with something else on your `$PATH` (Cloud Foundry ships a
+`cf`), install with `pip install --no-scripts` and symlink only the name you
+want, or just use the single-file install below and name it yourself.
+
 **Requirements:** Linux with systemd user sessions, Python 3.9+, and zellij
 and/or tmux. No third-party Python packages.
 

@@ -18,6 +18,7 @@ from claude_followup import (
     parse_duration,
     parse_clock,
     parse_reset,
+    prog_name,
     sanitize,
     unit_name,
     _DESCRIPTION,
@@ -229,6 +230,17 @@ class TestUnitNaming(unittest.TestCase):
         self.assertEqual(parsed.group("backend"), "tmux")
         self.assertEqual(parsed.group("target"), "my session")
         self.assertEqual(parsed.group("message"), "run: tests :: now")
+
+
+class TestProgName(unittest.TestCase):
+    def test_reports_the_alias_it_was_invoked_as(self):
+        self.assertEqual(prog_name("/home/u/.local/bin/cf"), "cf")
+        self.assertEqual(prog_name("/usr/bin/claude-followup"), "claude-followup")
+
+    def test_falls_back_for_direct_and_module_invocation(self):
+        for argv0 in ["", "./claude_followup.py", "/usr/bin/python3",
+                      "/usr/lib/python3.12/unittest/__main__.py"]:
+            self.assertEqual(prog_name(argv0), "claude-followup", argv0)
 
 
 class TestFormatting(unittest.TestCase):

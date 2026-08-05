@@ -27,6 +27,7 @@ Issues = "https://github.com/poruchik-bi/claude-followup/issues"
 
 [project.scripts]
 claude-followup = "claude_followup:main"
+cf = "claude_followup:main"
 
 [tool.setuptools]
 py-modules = ["claude_followup"]
