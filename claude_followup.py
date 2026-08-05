@@ -12,6 +12,7 @@ Stdlib only. Linux only (systemd --user).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -26,7 +27,7 @@ from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 CANONICAL_PROG = "claude-followup"
 
@@ -37,6 +38,23 @@ def prog_name(argv0: str | None = None) -> str:
     if not name or name.endswith(".py") or name.startswith("python"):
         return CANONICAL_PROG
     return name
+
+
+def build_id() -> str:
+    """Short hash of this file's own contents.
+
+    This gets copied around as a loose script, so the version number alone
+    cannot tell you whether two machines are running the same code. Comparing
+    build ids answers that without a package manager or a git checkout.
+    """
+    try:
+        return hashlib.sha256(Path(__file__).resolve().read_bytes()).hexdigest()[:7]
+    except OSError:
+        return "unknown"
+
+
+def version_string() -> str:
+    return f"{CANONICAL_PROG} {__version__} (build {build_id()})"
 
 
 PROG = prog_name()
@@ -1069,7 +1087,10 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--version", action="version", version=f"{PROG} {__version__}")
+    parser.add_argument(
+        "-v", "--version", action="version", version=version_string(),
+        help="show version and build id (compare across machines)",
+    )
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--json", action="store_true", help="machine-readable output")

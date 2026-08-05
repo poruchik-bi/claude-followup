@@ -6,11 +6,15 @@ mocked; the parsers are where the bugs actually live, especially the
 usage-limit reset scraping, which is coupled to Claude Code's output format.
 """
 
+import hashlib
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from claude_followup import (
     ParseError,
+    __version__,
+    build_id,
     classify_when,
     describe,
     fire_at_of,
@@ -22,6 +26,7 @@ from claude_followup import (
     prog_name,
     sanitize,
     unit_name,
+    version_string,
     _DESCRIPTION,
 )
 
@@ -318,6 +323,29 @@ class TestProgName(unittest.TestCase):
         for argv0 in ["", "./claude_followup.py", "/usr/bin/python3",
                       "/usr/lib/python3.12/unittest/__main__.py"]:
             self.assertEqual(prog_name(argv0), "claude-followup", argv0)
+
+
+class TestVersion(unittest.TestCase):
+    def test_build_id_is_a_short_hex_digest(self):
+        build = build_id()
+        self.assertEqual(len(build), 7)
+        self.assertTrue(all(c in "0123456789abcdef" for c in build), build)
+
+    def test_build_id_tracks_file_contents(self):
+        # Two installs reporting the same version can still be different code;
+        # the build id is what makes that visible when comparing machines.
+        import claude_followup
+
+        source = Path(claude_followup.__file__).read_bytes()
+        self.assertEqual(hashlib.sha256(source).hexdigest()[:7], build_id())
+        altered = hashlib.sha256(source + b"\n# changed\n").hexdigest()[:7]
+        self.assertNotEqual(altered, build_id())
+
+    def test_version_string_carries_both(self):
+        text = version_string()
+        self.assertIn("claude-followup", text)
+        self.assertIn(__version__, text)
+        self.assertIn(build_id(), text)
 
 
 class TestFormatting(unittest.TestCase):

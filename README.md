@@ -217,6 +217,20 @@ reboot and clean themselves up after firing.
 Every command takes `--json` for scripting, and `--dry-run` where it changes
 something.
 
+### Checking what you're running
+
+Because this gets copied between machines as a loose file, the version number
+alone can't tell you whether two installs are the same code. `-v` reports a
+hash of the file itself, so you can compare:
+
+```console
+$ claude-followup -v
+claude-followup 0.2.0 (build b0bccfe)
+```
+
+Same build id means byte-identical code. Different id, same version, means one
+machine is stale — re-copy the file.
+
 ## How it works
 
 1. Resolve the session name to zellij or tmux (`--backend` forces one).
