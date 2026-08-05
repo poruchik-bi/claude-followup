@@ -258,6 +258,28 @@ def _resolve_zone(name: str | None, fallback: datetime):
         return fallback.tzinfo
 
 
+def _reset_matches(text: str) -> list[re.Match]:
+    """Reset stamps in `text`, preferring lines that actually mention a limit.
+
+    A pane dump is arbitrary terminal scrollback -- an editor buffer, a diff,
+    or a chat window discussing this very tool can all contain the word
+    "resets" followed by a time. Claude Code's real notice always names the
+    limit ("You've hit your session limit · resets 5pm"), so scoping to those
+    lines drops most false positives.
+
+    ponytail: substring check, not a parser. It still trusts the last match if
+    several limit lines are on screen; anchor on the transcript instead if
+    pane scraping ever proves too noisy.
+    """
+    lines = text.splitlines()
+    limit_lines = [line for line in lines if "limit" in line.lower()]
+    for pool in (limit_lines, lines):
+        matches = [m for line in pool for m in _RESET.finditer(line)]
+        if matches:
+            return matches
+    return []
+
+
 def parse_reset(text: str, now: datetime | None = None) -> tuple[datetime, str] | None:
     """Find a Claude usage-limit reset stamp in arbitrary text.
 
@@ -266,7 +288,7 @@ def parse_reset(text: str, now: datetime | None = None) -> tuple[datetime, str] 
     so the last mention is the current one.
     """
     now = now or datetime.now().astimezone()
-    matches = list(_RESET.finditer(text or ""))
+    matches = _reset_matches(text or "")
     if not matches:
         return None
     match = matches[-1]
@@ -302,9 +324,11 @@ def parse_reset(text: str, now: datetime | None = None) -> tuple[datetime, str] 
         # at 19:04 means the reset happened four minutes ago, not in 23h56m.
         # Safe because undated stamps are session limits (hours, not days);
         # weekly limits carry an explicit date and are handled above.
+        # On an exact 12h tie, prefer the future one: waiting is recoverable,
+        # firing into a still-limited session is not.
         when = min(
             (when + timedelta(days=offset) for offset in (-1, 0, 1)),
-            key=lambda candidate: abs(candidate - local_now),
+            key=lambda candidate: (abs(candidate - local_now), candidate < local_now),
         )
         stamp = raw_time
 

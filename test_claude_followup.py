@@ -210,6 +210,29 @@ class TestParseReset(unittest.TestCase):
         # 8pm is 8h ahead, yesterday's 8pm is 16h behind. Nearest is ahead.
         self.assertEqual(parse_reset("resets 8pm", NOW)[0], NOW.replace(hour=20))
 
+    def test_ignores_reset_stamps_on_non_limit_lines(self):
+        # Real pane scrollback: chat text about this tool sat above the actual
+        # notice, and every line of it matched the bare "resets <time>" shape.
+        pane = "\n".join([
+            "An undated stamp like `resets 7pm` is read as the nearest",
+            "a past resets 7pm sends now; a future resets 11pm still schedules",
+            "  You've hit your session limit · resets 12am (UTC)",
+            "  /upgrade to increase your usage limit.",
+        ])
+        when, stamp = parse_reset(pane, NOW)
+        self.assertEqual(stamp, "12am (UTC)")
+        self.assertEqual(when, datetime(2026, 8, 6, 0, 0, tzinfo=timezone.utc))
+
+    def test_exact_twelve_hour_tie_prefers_the_future(self):
+        # 'resets 12am' read at noon is 12h either way. Waiting is recoverable;
+        # firing into a session that is still limited wastes the prompt.
+        when, _ = parse_reset("session limit · resets 12am (UTC)", NOW)
+        self.assertEqual(when, datetime(2026, 8, 6, 0, 0, tzinfo=timezone.utc))
+
+    def test_falls_back_when_no_line_mentions_a_limit(self):
+        # Keeps working if the wording ever drops the word "limit".
+        self.assertEqual(parse_reset("resets 8pm", NOW)[0], NOW.replace(hour=20))
+
     def test_last_match_wins(self):
         text = "resets 1pm (UTC)\n...later...\nresets 5pm (UTC)"
         self.assertEqual(parse_reset(text, NOW)[0], NOW.replace(hour=17))
