@@ -296,8 +296,16 @@ def parse_reset(text: str, now: datetime | None = None) -> tuple[datetime, str] 
                 return None
         stamp = f"{match.group('month').title()} {day}, {raw_time}"
     else:
-        if when <= local_now:
-            when += timedelta(days=1)
+        # A bare "resets 7pm" has no date, and the text it came from was
+        # written at some unknown point before we read it. Take the occurrence
+        # NEAREST the anchor rather than the next one after it: reading "7pm"
+        # at 19:04 means the reset happened four minutes ago, not in 23h56m.
+        # Safe because undated stamps are session limits (hours, not days);
+        # weekly limits carry an explicit date and are handled above.
+        when = min(
+            (when + timedelta(days=offset) for offset in (-1, 0, 1)),
+            key=lambda candidate: abs(candidate - local_now),
+        )
         stamp = raw_time
 
     if raw_tz:
@@ -600,8 +608,8 @@ def detect_reset(target: str, backend: Backend) -> Detection:
         if candidates:
             latest = max(candidates, key=lambda c: c.when)
             raise FollowupError(
-                f"only found a reset that already passed: "
-                f"{fmt_time(latest.when)} (from {latest.source})"
+                f"that limit already reset at {fmt_time(latest.when)} "
+                f"(from {latest.source}) -- nothing to wait for, just continue"
             )
         raise FollowupError(
             f"no usage-limit reset found for {target!r} -- "

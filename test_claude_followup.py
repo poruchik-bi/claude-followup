@@ -145,11 +145,23 @@ class TestParseResetRealWorld(unittest.TestCase):
         )
         self.assertEqual(when, NOW.replace(hour=15, minute=30))
 
-    def test_session_limit_rolls_to_tomorrow(self):
+    def test_stale_notice_stays_in_the_past(self):
+        # 3am read at noon is a notice from before 3am; that limit has reset.
+        # Rolling it to tomorrow would queue a 15h wait for nothing.
         when, _ = parse_reset(
             "You've hit your session limit · resets 3am (UTC)", NOW
         )
-        self.assertEqual(when, NOW.replace(hour=3) + timedelta(days=1))
+        self.assertEqual(when, NOW.replace(hour=3))
+
+    def test_reset_that_just_happened_is_not_pushed_a_day_out(self):
+        # Reported case: pane said 'resets 7pm (UTC)' and it was 19:04.
+        # The limit had reset 4 minutes earlier, not in 23h56m.
+        anchor = NOW.replace(hour=19, minute=4)
+        when, _ = parse_reset(
+            "You've hit your session limit · resets 7pm (UTC)", anchor
+        )
+        self.assertEqual(when, NOW.replace(hour=19, minute=0))
+        self.assertLess(when, anchor)
 
     def test_weekly_limit_carries_a_date(self):
         # The dated form must NOT collapse to today, or we would fire days early.
@@ -182,19 +194,21 @@ class TestParseReset(unittest.TestCase):
         self.assertEqual(when, NOW.replace(hour=15))
 
     def test_named_iana_zone(self):
-        # 08:00 Asia/Dhaka (UTC+6) on the 6th == 02:00 UTC on the 6th.
+        # NOW is 18:00 in Dhaka (UTC+6); the nearest 08:00 Dhaka is that
+        # morning, 02:00 UTC the same day.
         when, stamp = parse_reset("resets 8am (Asia/Dhaka)", NOW)
-        self.assertEqual(when, datetime(2026, 8, 6, 2, 0, tzinfo=timezone.utc))
+        self.assertEqual(when, datetime(2026, 8, 5, 2, 0, tzinfo=timezone.utc))
         self.assertEqual(stamp, "8am (Asia/Dhaka)")
 
     def test_hour_only_needs_meridiem(self):
         self.assertEqual(parse_reset("resets 8pm", NOW)[0], NOW.replace(hour=20))
         self.assertIsNone(parse_reset("resets 8", NOW))
 
-    def test_rolls_past_midnight(self):
-        # 9am has gone by at 12:00, so the next reset is tomorrow.
-        when, _ = parse_reset("resets 9am", NOW)
-        self.assertEqual(when, NOW.replace(hour=9) + timedelta(days=1))
+    def test_nearest_occurrence_not_next(self):
+        # 9am is 3h behind noon; 9am tomorrow is 21h ahead. Nearest wins.
+        self.assertEqual(parse_reset("resets 9am", NOW)[0], NOW.replace(hour=9))
+        # 8pm is 8h ahead, yesterday's 8pm is 16h behind. Nearest is ahead.
+        self.assertEqual(parse_reset("resets 8pm", NOW)[0], NOW.replace(hour=20))
 
     def test_last_match_wins(self):
         text = "resets 1pm (UTC)\n...later...\nresets 5pm (UTC)"
