@@ -160,6 +160,40 @@ Use `--dry-run` if you want to see which way it will go without typing
 anything. If no reset is found at all, `--auto` fails loudly rather than
 guessing a time — use `--in` or `--at` for those.
 
+#### When `--auto` finds nothing
+
+`detect --explain` shows every place it looked and what it saw:
+
+```console
+$ claude-followup detect claude4 --explain
+zellij pane: captured 839 chars
+  lines mentioning a limit: 0
+  reset stamps matched: none
+claude session id: 04d064dd-3389-40d6-b8cc-ec55d8efccb6
+  transcripts searched: 1
+    04d064dd-....jsonl: 0 rate-limit entries
+candidates: 0
+claude-followup: no usage-limit reset found for 'claude4'
+```
+
+That output is the diagnosis. The common causes:
+
+- **The notice scrolled out of the pane.** Claude Code's TUI repaints its own
+  viewport, so old output never reaches the multiplexer's scrollback — once
+  it's gone from the TUI, it's gone. `--auto` is most reliable run soon after
+  you hit the limit.
+- **The transcript has no `rate_limit` entry.** Claude Code does not always
+  record one, so the pane is often the only source. `0 rate-limit entries`
+  with `0` limit lines on the pane means there is genuinely nothing to read.
+- **The pane wasn't the Claude one.** Both backends dump the session's active
+  pane; if that's a shell, there's nothing to find.
+
+When there's no evidence, reach for `--at` with the time you saw:
+
+```sh
+claude-followup schedule claude4 --at 12am -m continue
+```
+
 An undated stamp like `resets 7pm` is read as the occurrence *nearest* the
 moment it was written, not the next one after it. Seen at 19:04, that is 19:00
 today — four minutes ago — not 19:00 tomorrow.

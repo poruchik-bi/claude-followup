@@ -609,25 +609,49 @@ class Detection:
         return self.when <= datetime.now().astimezone()
 
 
-def detect_reset(target: str, backend: Backend) -> Detection:
+def detect_reset(
+    target: str, backend: Backend, notes: list[str] | None = None
+) -> Detection:
     """Find the usage-limit reset for a session.
 
     Prefers the earliest reset still ahead; if every one found has already
     happened, returns the most recent of those with `already_reset` set, so
     callers can act on a lifted limit instead of treating it as a failure.
     Raises only when no reset is found at all.
+
+    Pass `notes` to collect a trace of where it looked and what it saw --
+    this is scraping someone else's output format, so "why did it find
+    nothing" needs to be answerable without a debugger.
     """
     now = datetime.now().astimezone()
     candidates: list[Detection] = []
 
+    def note(line: str) -> None:
+        if notes is not None:
+            notes.append(line)
+
     # The pane is live, so 'now' is the right anchor for whatever it shows.
-    found = parse_reset(backend.capture(target), now)
+    pane = backend.capture(target)
+    note(f"{backend.name} pane: captured {len(pane)} chars")
+    limit_lines = [ln.strip() for ln in pane.splitlines() if "limit" in ln.lower()]
+    note(f"  lines mentioning a limit: {len(limit_lines)}")
+    for line in limit_lines[-3:]:
+        note(f"    | {line[:100]}")
+    stamps = [m.group(0).strip() for m in _reset_matches(pane)]
+    note(f"  reset stamps matched: {stamps or 'none'}")
+    found = parse_reset(pane, now)
     if found:
         candidates.append(Detection(found[0], found[1], f"{backend.name} pane"))
 
     session_id = claude_session_id(target, backend)
-    for path in transcript_files(session_id):
-        for written, text in rate_limit_texts(path):
+    note(f"claude session id: {session_id or 'not mapped to this pane'}")
+    paths = transcript_files(session_id)
+    note(f"  transcripts searched: {len(paths)}")
+    for path in paths:
+        rows = list(rate_limit_texts(path))
+        if rows or session_id:
+            note(f"    {path.name}: {len(rows)} rate-limit entries")
+        for written, text in rows:
             # Anchor to when the notice was written, not to now. 'resets 5pm'
             # recorded last month means 5pm THAT day -- long since reset.
             found = parse_reset(text, written or now)
@@ -636,6 +660,11 @@ def detect_reset(target: str, backend: Backend) -> Detection:
                 candidates.append(Detection(found[0], found[1], label))
         if session_id:
             break
+
+    note(f"candidates: {len(candidates)}")
+    for candidate in candidates:
+        state = "past" if candidate.when <= now else "future"
+        note(f"  {fmt_time(candidate.when)}  {state:6} {candidate.stamp} ({candidate.source})")
 
     if not candidates:
         raise FollowupError(
@@ -904,7 +933,16 @@ def cmd_send(args) -> int:
 
 def cmd_detect(args) -> int:
     backend = resolve_backend(args.session, args.backend)
-    found = detect_reset(args.session, backend)
+    notes: list[str] | None = [] if args.explain else None
+    try:
+        found = detect_reset(args.session, backend, notes)
+    except FollowupError:
+        # The trace matters most when nothing was found.
+        if notes:
+            print("\n".join(notes), file=sys.stderr)
+        raise
+    if notes:
+        print("\n".join(notes))
     reset_at = int(found.when.timestamp())
     fire_at = reset_at + args.buffer
     lifted = found.already_reset
@@ -1082,6 +1120,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="show the detected usage-limit reset without scheduling",
     )
     detect.add_argument("session")
+    detect.add_argument(
+        "--explain", action="store_true",
+        help="show where it looked and what it matched (use when --auto finds nothing)",
+    )
     detect.set_defaults(func=cmd_detect)
 
     listing = sub.add_parser("list", aliases=["ls"], parents=[common],
