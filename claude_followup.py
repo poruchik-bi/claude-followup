@@ -62,6 +62,8 @@ PROG = prog_name()
 UNIT_PREFIX = "claude-followup"
 DEFAULT_MESSAGE = "continue"
 DEFAULT_BUFFER_SEC = 30
+# How many zellij pane ids to try when the focused-pane dump is empty.
+PANE_SWEEP = 16
 
 # Env vars forwarded into the systemd timer so the multiplexer client can still
 # find its server socket and its binary when it fires.
@@ -457,14 +459,28 @@ class Zellij(Backend):
                 )
 
     def capture(self, target: str, notes: list[str] | None = None) -> str:
-        # dump-screen takes no path argument and dumps the FOCUSED pane, so a
-        # session with no client attached to it produces nothing at all.
+        # Without --pane-id, dump-screen dumps the FOCUSED pane -- and a session
+        # with no client attached has no focused pane, so it returns nothing.
+        # Naming a pane id explicitly still works while detached.
         result = _run(["zellij", "--session", target, "action", "dump-screen", "--full"])
         if result.returncode != 0:
             _note(notes, f"  dump-screen failed: rc={result.returncode} "
                          f"stderr={result.stderr.strip()[:120]!r}")
-            return ""
-        return result.stdout
+        elif result.stdout.strip():
+            return result.stdout
+
+        # ponytail: linear sweep of pane ids, one subprocess each. zellij has no
+        # "list panes" action, so there is nothing to enumerate; raise the bound
+        # if anyone runs more than PANE_SWEEP panes in one session.
+        _note(notes, "  focused-pane dump empty (detached?) -- sweeping pane ids")
+        chunks = []
+        for pane_id in range(PANE_SWEEP):
+            swept = _run(["zellij", "--session", target, "action", "dump-screen",
+                          "--full", "--pane-id", str(pane_id)])
+            if swept.returncode == 0 and swept.stdout.strip():
+                chunks.append(swept.stdout)
+        _note(notes, f"  swept pane ids 0-{PANE_SWEEP - 1}: {len(chunks)} non-empty")
+        return "\n".join(chunks)
 
 
 class Tmux(Backend):

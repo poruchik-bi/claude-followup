@@ -127,6 +127,10 @@ Use `-m` when the message starts with a dash.
 pane (`dump-screen` / `capture-pane`) and the session's JSONL transcript under
 `~/.claude/projects/` — and takes the earliest reset still in the future.
 
+It works whether or not you are attached. zellij only dumps the focused pane
+by default, which a detached session does not have, so the capture falls back
+to sweeping pane ids explicitly.
+
 It understands both shapes Claude Code emits:
 
 ```
@@ -178,10 +182,10 @@ claude-followup: no usage-limit reset found for 'claude4'
 
 That output is the diagnosis. The common causes:
 
-- **`captured 0 chars` — nothing is attached to that session.** `zellij action
-  dump-screen` dumps the *focused* pane, and an unattached session has none.
-  Attach to it (`zellij attach <session>`) and retry, or use `--at`. This is
-  the usual cause when the same command works on one machine and not another.
+- **`captured 0 chars`.** A detached zellij session has no *focused* pane, so
+  the plain `dump-screen` returns nothing. This is handled: the capture falls
+  back to sweeping explicit `--pane-id`s, which work while detached. If the
+  sweep also comes back empty, the session really has no readable pane.
 - **The notice scrolled out of the pane.** Claude Code's TUI repaints its own
   viewport, so old output never reaches the multiplexer's scrollback — once
   it's gone from the TUI, it's gone. `--auto` is most reliable run soon after
