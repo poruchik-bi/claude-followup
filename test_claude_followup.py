@@ -17,6 +17,7 @@ from claude_followup import (
     fmt_delta,
     parse_duration,
     parse_clock,
+    parse_iso,
     parse_reset,
     prog_name,
     sanitize,
@@ -230,6 +231,45 @@ class TestUnitNaming(unittest.TestCase):
         self.assertEqual(parsed.group("backend"), "tmux")
         self.assertEqual(parsed.group("target"), "my session")
         self.assertEqual(parsed.group("message"), "run: tests :: now")
+
+
+class TestTranscriptAnchoring(unittest.TestCase):
+    """A bare 'resets 5pm' only means something relative to when it was written."""
+
+    def test_parses_transcript_timestamps(self):
+        self.assertEqual(
+            parse_iso("2026-07-08T13:54:17.138Z"),
+            datetime(2026, 7, 8, 13, 54, 17, 138000, tzinfo=timezone.utc),
+        )
+        self.assertEqual(parse_iso("2026-07-08T13:54:17+00:00").year, 2026)
+
+    def test_bad_timestamps_are_none(self):
+        for stamp in [None, "", "not-a-date", "2026-13-45T99:99:99Z"]:
+            self.assertIsNone(parse_iso(stamp), stamp)
+
+    def test_stale_entry_resolves_into_the_past(self):
+        # Written 2026-07-08 13:54Z, saying 'resets 4:50pm'. That reset happened
+        # the same afternoon; anchoring to NOW instead would wrongly place it
+        # tomorrow and schedule a follow-up for a month-dead rate limit.
+        written = parse_iso("2026-07-08T13:54:17.138Z")
+        when, _ = parse_reset(
+            "You've hit your session limit · resets 4:50pm (UTC)", written
+        )
+        self.assertEqual(when, datetime(2026, 7, 8, 16, 50, tzinfo=timezone.utc))
+        self.assertLess(when, NOW)  # so detect_reset discards it
+
+    def test_live_entry_still_resolves_into_the_future(self):
+        written = NOW - timedelta(minutes=5)
+        when, _ = parse_reset(
+            "You've hit your session limit · resets 5pm (UTC)", written
+        )
+        self.assertEqual(when, NOW.replace(hour=17))
+        self.assertGreater(when, NOW)
+
+    def test_entry_written_before_midnight_rolls_forward(self):
+        written = datetime(2026, 8, 5, 23, 30, tzinfo=timezone.utc)
+        when, _ = parse_reset("resets 1am (UTC)", written)
+        self.assertEqual(when, datetime(2026, 8, 6, 1, 0, tzinfo=timezone.utc))
 
 
 class TestProgName(unittest.TestCase):

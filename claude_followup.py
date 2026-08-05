@@ -523,8 +523,23 @@ def transcript_files(session_id: str | None) -> list[Path]:
     return recent[:40]
 
 
-def rate_limit_texts(path: Path) -> Iterator[str]:
-    """Yield assistant text from rate-limit entries, oldest first."""
+def parse_iso(stamp: str | None) -> datetime | None:
+    """Transcript timestamps look like '2026-07-08T13:54:17.138Z'."""
+    if not stamp:
+        return None
+    try:
+        # fromisoformat only learned to read a trailing 'Z' in 3.11.
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def rate_limit_texts(path: Path) -> Iterator[tuple[datetime | None, str]]:
+    """Yield (when the entry was written, its text) for rate-limit entries.
+
+    The write time matters: a reset stamp like 'resets 5pm' has no date, so it
+    only means anything relative to when it was recorded.
+    """
     try:
         with path.open(errors="replace") as handle:
             for line in handle:
@@ -537,11 +552,12 @@ def rate_limit_texts(path: Path) -> Iterator[str]:
                     continue
                 if entry.get("error") != "rate_limit" and entry.get("apiErrorStatus") != 429:
                     continue
+                written = parse_iso(entry.get("timestamp"))
                 content = (entry.get("message") or {}).get("content")
                 if isinstance(content, str):
-                    yield content
+                    yield written, content
                 elif isinstance(content, list):
-                    yield "\n".join(
+                    yield written, "\n".join(
                         part.get("text", "")
                         for part in content
                         if isinstance(part, dict) and part.get("type") == "text"
@@ -562,17 +578,20 @@ def detect_reset(target: str, backend: Backend) -> Detection:
     now = datetime.now().astimezone()
     candidates: list[Detection] = []
 
+    # The pane is live, so 'now' is the right anchor for whatever it shows.
     found = parse_reset(backend.capture(target), now)
     if found:
         candidates.append(Detection(found[0], found[1], f"{backend.name} pane"))
 
     session_id = claude_session_id(target, backend)
     for path in transcript_files(session_id):
-        text = "\n".join(rate_limit_texts(path))
-        found = parse_reset(text, now)
-        if found:
-            label = "transcript" if session_id else f"transcript {path.stem[:8]}"
-            candidates.append(Detection(found[0], found[1], label))
+        for written, text in rate_limit_texts(path):
+            # Anchor to when the notice was written, not to now. 'resets 5pm'
+            # recorded last month means 5pm THAT day -- long since reset.
+            found = parse_reset(text, written or now)
+            if found:
+                label = "transcript" if session_id else f"transcript {path.stem[:8]}"
+                candidates.append(Detection(found[0], found[1], label))
         if session_id:
             break
 
