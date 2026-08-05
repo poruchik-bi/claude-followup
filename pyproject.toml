@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-followup"
+version = "0.1.0"
+description = "Schedule follow-up prompts into a running Claude Code session"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["claude", "claude-code", "zellij", "tmux", "systemd", "scheduler", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Utilities",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/poruchik-bi/claude-followup"
+Issues = "https://github.com/poruchik-bi/claude-followup/issues"
+
+[project.scripts]
+claude-followup = "claude_followup:main"
+
+[tool.setuptools]
+py-modules = ["claude_followup"]
