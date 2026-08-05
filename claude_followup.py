@@ -360,6 +360,11 @@ def parse_reset(text: str, now: datetime | None = None) -> tuple[datetime, str] 
 # --------------------------------------------------------------------------
 
 
+def _note(notes: list[str] | None, line: str) -> None:
+    if notes is not None:
+        notes.append(line)
+
+
 def _run(cmd: Sequence[str], **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(
         list(cmd), capture_output=True, text=True, check=False, **kwargs
@@ -377,8 +382,15 @@ class Backend:
     def binary(self) -> str:
         return self.name
 
+    VERSION_FLAG = "--version"
+
     def installed(self) -> bool:
         return shutil.which(self.binary) is not None
+
+    def version(self) -> str:
+        result = _run([self.binary, self.VERSION_FLAG])
+        text = (result.stdout or result.stderr).strip()
+        return text.splitlines()[0] if text else "unknown"
 
     def sessions(self) -> list[str]:
         raise NotImplementedError
@@ -390,7 +402,7 @@ class Backend:
     def send(self, target: str, message: str) -> None:
         raise NotImplementedError
 
-    def capture(self, target: str) -> str:
+    def capture(self, target: str, notes: list[str] | None = None) -> str:
         raise NotImplementedError
 
 
@@ -417,23 +429,20 @@ class Zellij(Backend):
                     f"{result.stderr.strip() or 'unknown error'}"
                 )
 
-    def capture(self, target: str) -> str:
+    def capture(self, target: str, notes: list[str] | None = None) -> str:
+        # dump-screen takes no path argument and dumps the FOCUSED pane, so a
+        # session with no client attached to it produces nothing at all.
         result = _run(["zellij", "--session", target, "action", "dump-screen", "--full"])
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout
-        # Older zellij writes to a path argument instead of stdout.
-        scratch = Path(os.environ.get("TMPDIR", "/tmp")) / f".{PROG}-{os.getpid()}.dump"
-        try:
-            _run(["zellij", "--session", target, "action", "dump-screen",
-                  "--full", str(scratch)])
-            return scratch.read_text(errors="replace") if scratch.exists() else ""
-        except OSError:
+        if result.returncode != 0:
+            _note(notes, f"  dump-screen failed: rc={result.returncode} "
+                         f"stderr={result.stderr.strip()[:120]!r}")
             return ""
-        finally:
-            scratch.unlink(missing_ok=True)
+        return result.stdout
 
 
 class Tmux(Backend):
+    VERSION_FLAG = "-V"
+
     def sessions(self) -> list[str]:
         result = _run(["tmux", "list-sessions", "-F", "#{session_name}"])
         if result.returncode != 0:
@@ -449,9 +458,12 @@ class Tmux(Backend):
                     f"{result.stderr.strip() or 'unknown error'}"
                 )
 
-    def capture(self, target: str) -> str:
+    def capture(self, target: str, notes: list[str] | None = None) -> str:
         result = _run(["tmux", "capture-pane", "-p", "-t", target, "-S", "-2000"])
-        return result.stdout if result.returncode == 0 else ""
+        if result.returncode != 0:
+            _note(notes, f"  capture-pane failed: {result.stderr.strip()[:120]!r}")
+            return ""
+        return result.stdout
 
 
 BACKENDS = {"zellij": Zellij("zellij"), "tmux": Tmux("tmux")}
@@ -568,8 +580,11 @@ def transcript_files(session_id: str | None) -> list[Path]:
     if not projects.is_dir():
         return []
     if session_id:
-        return sorted(projects.glob(f"*/{session_id}.jsonl"))
-    recent = sorted(projects.glob("*/*.jsonl"), key=_mtime, reverse=True)
+        hits = sorted(projects.glob(f"*/{session_id}.jsonl"))
+        # Fall back to a full walk: the layout is not guaranteed to be exactly
+        # one directory deep, and a missed transcript silently disables --auto.
+        return hits or sorted(projects.rglob(f"{session_id}.jsonl"))
+    recent = sorted(projects.rglob("*.jsonl"), key=_mtime, reverse=True)
     return recent[:40]
 
 
@@ -645,12 +660,16 @@ def detect_reset(
     candidates: list[Detection] = []
 
     def note(line: str) -> None:
-        if notes is not None:
-            notes.append(line)
+        _note(notes, line)
+
+    note(f"{PROG} {__version__} (build {build_id()})")
+    note(f"backend: {backend.version()}")
 
     # The pane is live, so 'now' is the right anchor for whatever it shows.
-    pane = backend.capture(target)
+    pane = backend.capture(target, notes)
     note(f"{backend.name} pane: captured {len(pane)} chars")
+    if not pane.strip():
+        note("  (empty -- both backends dump the session's ACTIVE pane;\n   an unattached zellij session often has none)")
     limit_lines = [ln.strip() for ln in pane.splitlines() if "limit" in ln.lower()]
     note(f"  lines mentioning a limit: {len(limit_lines)}")
     for line in limit_lines[-3:]:
@@ -663,8 +682,14 @@ def detect_reset(
 
     session_id = claude_session_id(target, backend)
     note(f"claude session id: {session_id or 'not mapped to this pane'}")
+    projects = claude_home() / "projects"
     paths = transcript_files(session_id)
+    note(f"  claude home: {claude_home()}")
+    note(f"  projects dir: {projects} (exists={projects.is_dir()}, "
+         f"jsonl files={len(list(projects.rglob('*.jsonl'))) if projects.is_dir() else 0})")
     note(f"  transcripts searched: {len(paths)}")
+    if session_id and not paths:
+        note(f"    no file named {session_id}.jsonl anywhere under projects")
     for path in paths:
         rows = list(rate_limit_texts(path))
         if rows or session_id:

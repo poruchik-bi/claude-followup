@@ -178,6 +178,10 @@ claude-followup: no usage-limit reset found for 'claude4'
 
 That output is the diagnosis. The common causes:
 
+- **`captured 0 chars` — nothing is attached to that session.** `zellij action
+  dump-screen` dumps the *focused* pane, and an unattached session has none.
+  Attach to it (`zellij attach <session>`) and retry, or use `--at`. This is
+  the usual cause when the same command works on one machine and not another.
 - **The notice scrolled out of the pane.** Claude Code's TUI repaints its own
   viewport, so old output never reaches the multiplexer's scrollback — once
   it's gone from the TUI, it's gone. `--auto` is most reliable run soon after
