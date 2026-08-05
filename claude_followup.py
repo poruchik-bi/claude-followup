@@ -580,9 +580,19 @@ class Detection:
     stamp: str
     source: str
 
+    @property
+    def already_reset(self) -> bool:
+        return self.when <= datetime.now().astimezone()
+
 
 def detect_reset(target: str, backend: Backend) -> Detection:
-    """Find the next usage-limit reset for a session. Raises if none is in the future."""
+    """Find the usage-limit reset for a session.
+
+    Prefers the earliest reset still ahead; if every one found has already
+    happened, returns the most recent of those with `already_reset` set, so
+    callers can act on a lifted limit instead of treating it as a failure.
+    Raises only when no reset is found at all.
+    """
     now = datetime.now().astimezone()
     candidates: list[Detection] = []
 
@@ -603,19 +613,14 @@ def detect_reset(target: str, backend: Backend) -> Detection:
         if session_id:
             break
 
-    future = [c for c in candidates if c.when > now]
-    if not future:
-        if candidates:
-            latest = max(candidates, key=lambda c: c.when)
-            raise FollowupError(
-                f"that limit already reset at {fmt_time(latest.when)} "
-                f"(from {latest.source}) -- nothing to wait for, just continue"
-            )
+    if not candidates:
         raise FollowupError(
-            f"no usage-limit reset found for {target!r} -- "
-            f"use --in or --at instead"
+            f"no usage-limit reset found for {target!r} -- use --in or --at instead"
         )
-    return min(future, key=lambda c: c.when)
+    future = [c for c in candidates if c.when > now]
+    if future:
+        return min(future, key=lambda c: c.when)
+    return max(candidates, key=lambda c: c.when)
 
 
 # --------------------------------------------------------------------------
@@ -778,12 +783,14 @@ def emit(data: object, as_json: bool, human: str) -> None:
 # --------------------------------------------------------------------------
 
 
-def resolve_fire_time(args, backend: Backend, target: str) -> tuple[int, str]:
+def resolve_fire_time(
+    args, backend: Backend, target: str, detection: Detection | None = None
+) -> tuple[int, str]:
     """-> (epoch to fire at, how we got there)."""
     now = datetime.now().astimezone()
 
     if args.auto:
-        found = detect_reset(target, backend)
+        found = detection or detect_reset(target, backend)
         base = found.when
         how = f"auto: reset {found.stamp} from {found.source}"
     elif args.at:
@@ -808,7 +815,34 @@ def cmd_schedule(args) -> int:
     target = args.session
     backend = resolve_backend(target, args.backend)
     message = args.message or DEFAULT_MESSAGE
-    fire_at, how = resolve_fire_time(args, backend, target)
+
+    # --auto means "deliver once the limit allows". If it already lifted, that
+    # is now -- scheduling a timer for a reset in the past would never fire.
+    detection = detect_reset(target, backend) if args.auto else None
+    if detection and detection.already_reset:
+        if not args.dry_run:
+            backend.send(target, message)
+        emit(
+            {
+                "action": "sent",
+                "backend": backend.name,
+                "session": target,
+                "message": message,
+                "reset_at_local": fmt_time(detection.when),
+                "source": detection.source,
+                "dry_run": args.dry_run,
+            },
+            args.json,
+            "\n".join([
+                f"limit already reset at {fmt_time(detection.when)} "
+                f"({detection.source}) -- nothing to wait for",
+                f"{'would send' if args.dry_run else 'sent'} -> "
+                f"{backend.name}:{target}: {message}",
+            ]),
+        )
+        return 0
+
+    fire_at, how = resolve_fire_time(args, backend, target, detection)
     job = schedule(backend, target, message, fire_at, dry_run=args.dry_run)
 
     when = datetime.fromtimestamp(fire_at).astimezone()
@@ -847,25 +881,38 @@ def cmd_send(args) -> int:
 def cmd_detect(args) -> int:
     backend = resolve_backend(args.session, args.backend)
     found = detect_reset(args.session, backend)
-    fire_at = int(found.when.timestamp()) + args.buffer
+    reset_at = int(found.when.timestamp())
+    fire_at = reset_at + args.buffer
+    lifted = found.already_reset
+    delta = fmt_delta(abs(reset_at - int(time.time())))
+
+    lines = [
+        f"session {backend.name}:{args.session}",
+        f"  reset  {fmt_time(found.when)}  ({delta} ago)" if lifted
+        else f"  reset  {fmt_time(found.when)}  (in {delta})",
+        f"  stamp  {found.stamp}",
+        f"  source {found.source}",
+    ]
+    lines.append(
+        "  status limit already lifted -- --auto would send immediately"
+        if lifted
+        else f"  would fire {fmt_time(datetime.fromtimestamp(fire_at).astimezone())} "
+             f"(+{args.buffer}s)"
+    )
     emit(
         {
             "backend": backend.name,
             "session": args.session,
-            "reset_at": int(found.when.timestamp()),
+            "reset_at": reset_at,
             "reset_at_local": fmt_time(found.when),
             "stamp": found.stamp,
             "source": found.source,
-            "fire_at_local": fmt_time(datetime.fromtimestamp(fire_at).astimezone()),
+            "already_reset": lifted,
+            "fire_at_local": None if lifted
+            else fmt_time(datetime.fromtimestamp(fire_at).astimezone()),
         },
         args.json,
-        "\n".join([
-            f"session {backend.name}:{args.session}",
-            f"  reset  {fmt_time(found.when)}  (in {fmt_delta(int(found.when.timestamp()) - int(time.time()))})",
-            f"  stamp  {found.stamp}",
-            f"  source {found.source}",
-            f"  would fire {fmt_time(datetime.fromtimestamp(fire_at).astimezone())} (+{args.buffer}s)",
-        ]),
+        "\n".join(lines),
     )
     return 0
 

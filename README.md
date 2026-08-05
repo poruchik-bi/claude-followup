@@ -147,7 +147,22 @@ session zellij:claude4
   would fire 2026-08-06 03:00:30 UTC (+30s)
 ```
 
-If no future reset is found, `--auto` fails loudly rather than picking a time.
+If the limit has **already lifted**, `--auto` sends the message straight away
+rather than scheduling — "deliver when the limit allows" means now:
+
+```console
+$ claude-followup schedule claude4 --auto -m continue
+limit already reset at 2026-08-05 19:00:00 UTC (zellij pane) -- nothing to wait for
+sent -> zellij:claude4: continue
+```
+
+Use `--dry-run` if you want to see which way it will go without typing
+anything. If no reset is found at all, `--auto` fails loudly rather than
+guessing a time — use `--in` or `--at` for those.
+
+An undated stamp like `resets 7pm` is read as the occurrence *nearest* the
+moment it was written, not the next one after it. Seen at 19:04, that is 19:00
+today — four minutes ago — not 19:00 tomorrow.
 
 ### Managing what's queued
 
