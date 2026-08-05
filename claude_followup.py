@@ -184,16 +184,43 @@ def _time_of_day(text: str) -> tuple[int, int]:
     return hour, minute
 
 
+def _split_zone(text: str) -> tuple[str, object | None]:
+    """Peel a trailing timezone off a clock string.
+
+    Claude Code reports resets in UTC, so '--at "11:59pm UTC"' has to work on
+    a box that is not itself on UTC. Returns (remaining text, tzinfo or None);
+    an unrecognised trailing word is left alone rather than swallowed.
+    """
+    match = re.search(
+        r"[\s(]+(?P<zone>[A-Za-z]+/[A-Za-z_+-]+|UTC|GMT|Z)\s*\)?$", text
+    )
+    if not match:
+        return text, None
+    name = match.group("zone")
+    if name.upper() in ("UTC", "GMT", "Z"):
+        return text[: match.start()].strip(), ZoneInfo("UTC")
+    try:
+        return text[: match.start()].strip(), ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return text, None
+
+
 def parse_clock(text: str, now: datetime | None = None) -> datetime:
-    """Clock or calendar time -> aware datetime in the local zone.
+    """Clock or calendar time -> aware datetime.
 
     Accepts '15:00', '3:15pm', 'tomorrow 09:00', 'friday 8am',
-    '2026-08-06 15:00'. Bare times that already passed roll to tomorrow.
+    '2026-08-06 15:00', and an explicit zone: '11:59pm UTC', '9am (Asia/Dhaka)'.
+    Bare times that already passed roll to tomorrow. The result is returned in
+    the caller's zone, so the epoch is right regardless of which zone was used.
     """
     now = now or datetime.now().astimezone()
-    s = " ".join(text.strip().lower().split())
+    stripped, zone = _split_zone(" ".join(text.strip().split()))
+    s = stripped.lower()
     if not s:
         raise ParseError("empty time")
+
+    # Interpret the wall-clock time in the zone the user named.
+    local = now.astimezone(zone) if zone else now
 
     day: date | None = None
     rolls_over = True  # only bare times-of-day may roll to the next day
@@ -213,25 +240,25 @@ def parse_clock(text: str, now: datetime | None = None) -> datetime:
         offset = 0 if relative.group(1) == "today" else 1
         if relative.group(1) == "tonight":
             offset = 0
-        day = now.date() + timedelta(days=offset)
+        day = local.date() + timedelta(days=offset)
         s = relative.group(2).strip()
         rolls_over = False
     elif weekday and weekday.group(1) in _WEEKDAYS:
         target = _WEEKDAYS[weekday.group(1)]
-        ahead = (target - now.weekday()) % 7 or 7
-        day = now.date() + timedelta(days=ahead)
+        ahead = (target - local.weekday()) % 7 or 7
+        day = local.date() + timedelta(days=ahead)
         s = weekday.group(2).strip()
         rolls_over = False
 
     hour, minute = _time_of_day(s)
-    when = datetime.combine(day or now.date(), datetime.min.time(), now.tzinfo)
+    when = datetime.combine(day or local.date(), datetime.min.time(), local.tzinfo)
     when = when.replace(hour=hour, minute=minute)
 
-    if when <= now:
+    if when <= local:
         if not rolls_over:
             raise ParseError(f"time already passed: {text!r}")
         when += timedelta(days=1)
-    return when
+    return when.astimezone(now.tzinfo)
 
 
 def looks_like_duration(text: str) -> bool:
@@ -636,6 +663,10 @@ class Detection:
     when: datetime
     stamp: str
     source: str
+    # False for the scattergun scan over unrelated transcripts: usage limits
+    # are account-wide, so another session's FUTURE reset is informative, but
+    # its expired one says nothing about this session.
+    trusted: bool = True
 
     @property
     def already_reset(self) -> bool:
@@ -700,7 +731,9 @@ def detect_reset(
             found = parse_reset(text, written or now)
             if found:
                 label = "transcript" if session_id else f"transcript {path.stem[:8]}"
-                candidates.append(Detection(found[0], found[1], label))
+                candidates.append(
+                    Detection(found[0], found[1], label, trusted=bool(session_id))
+                )
         if session_id:
             break
 
@@ -710,13 +743,24 @@ def detect_reset(
         note(f"  {fmt_time(candidate.when)}  {state:6} {candidate.stamp} ({candidate.source})")
 
     if not candidates:
+        why = "nothing is attached to that session" if not pane.strip() else "no reset on screen"
         raise FollowupError(
-            f"no usage-limit reset found for {target!r} -- use --in or --at instead"
+            f"no usage-limit reset found for {target!r} ({why}).\n"
+            f"  Read the time off your screen and pass it directly, zone included:\n"
+            f"    {PROG} schedule {target} --at '11:59pm UTC' -m continue\n"
+            f"  Run `{PROG} detect {target} --explain` to see where it looked."
         )
     future = [c for c in candidates if c.when > now]
     if future:
         return min(future, key=lambda c: c.when)
-    return max(candidates, key=lambda c: c.when)
+    # Only act on a lifted limit when the evidence is about THIS session.
+    settled = [c for c in candidates if c.trusted]
+    if settled:
+        return max(settled, key=lambda c: c.when)
+    raise FollowupError(
+        f"no usage-limit reset found for {target!r} "
+        f"(only expired notices from unrelated sessions) -- use --in or --at"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -1094,7 +1138,7 @@ examples:
 
 timing:
   --in   delay:  90m, 45s, 2h30m, '90 minutes', '1 hour'
-  --at   clock:  15:00, 3:15pm, 'tomorrow 09:00', 'friday 8am', 2026-08-06 15:00
+  --at   clock:  15:00, 3:15pm, '11:59pm UTC', 'tomorrow 09:00', 'friday 8am'
   --auto reads the usage-limit reset out of the session's pane and transcript
 
 environment:

@@ -105,7 +105,7 @@ claude-followup sessions                            # zellij + tmux sessions
 | Form | Accepts |
 |---|---|
 | `--in DURATION` | `90m`, `45s`, `2h30m`, `1h5m10s`, `"90 minutes"`, `"1 hour and 30 mins"` |
-| `--at TIME` | `15:00`, `3:15pm`, `"tomorrow 09:00"`, `"friday 8am"`, `2026-08-06 15:00` |
+| `--at TIME` | `15:00`, `3:15pm`, `"11:59pm UTC"`, `"tomorrow 09:00"`, `"friday 8am"`, `2026-08-06 15:00` |
 | `--auto` | reads the usage-limit reset out of the session itself |
 
 Bare times that have already passed roll to tomorrow. A bare number (`90`) or a
@@ -192,11 +192,16 @@ That output is the diagnosis. The common causes:
 - **The pane wasn't the Claude one.** Both backends dump the session's active
   pane; if that's a shell, there's nothing to find.
 
-When there's no evidence, reach for `--at` with the time you saw:
+When there's no evidence, read the time off your screen and pass it
+directly. Claude Code reports resets in UTC, so name the zone — it is
+converted to your local time for you:
 
 ```sh
-claude-followup schedule claude4 --at 12am -m continue
+claude-followup schedule claude4 --at '11:59pm UTC' -m continue
 ```
+
+`--at` accepts `UTC`, `GMT`, or any IANA name (`Asia/Dhaka`), bare or in
+parentheses. Without a zone the time is read as local.
 
 An undated stamp like `resets 7pm` is read as the occurrence *nearest* the
 moment it was written, not the next one after it. Seen at 19:04, that is 19:00

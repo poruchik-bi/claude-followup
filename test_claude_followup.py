@@ -10,6 +10,7 @@ import hashlib
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from claude_followup import (
     ParseError,
@@ -105,6 +106,30 @@ class TestParseClock(unittest.TestCase):
             parse_clock("2020-01-01 09:00", NOW)
         with self.assertRaisesRegex(ParseError, "already passed"):
             parse_clock("today 09:00", NOW)
+
+    def test_explicit_timezone(self):
+        # Claude Code reports resets in UTC; a box on another zone must still
+        # be able to type what it saw. NOW is 12:00 UTC.
+        self.assertEqual(parse_clock("11:59pm UTC", NOW),
+                         datetime(2026, 8, 5, 23, 59, tzinfo=timezone.utc))
+        self.assertEqual(parse_clock("12am UTC", NOW),
+                         datetime(2026, 8, 6, 0, 0, tzinfo=timezone.utc))
+        # 8am Dhaka (UTC+6) has passed at 18:00 Dhaka, so it rolls to the 6th.
+        self.assertEqual(parse_clock("8am (Asia/Dhaka)", NOW),
+                         datetime(2026, 8, 6, 2, 0, tzinfo=timezone.utc))
+
+    def test_timezone_from_a_non_utc_local_zone(self):
+        # Same instant, observer sitting in UTC+6: '11:59pm UTC' is still
+        # 23:59 UTC, not 23:59 local.
+        here = NOW.astimezone(ZoneInfo("Asia/Dhaka"))
+        self.assertEqual(parse_clock("11:59pm UTC", here).astimezone(timezone.utc),
+                         datetime(2026, 8, 5, 23, 59, tzinfo=timezone.utc))
+
+    def test_unknown_trailing_word_is_not_eaten(self):
+        for text in ["friday 8am", "tomorrow 09:00", "3:15pm"]:
+            parse_clock(text, NOW)  # must not raise
+        with self.assertRaises(ParseError):
+            parse_clock("8am Narnia", NOW)
 
     def test_bare_hour_is_ambiguous(self):
         with self.assertRaisesRegex(ParseError, "ambiguous"):
